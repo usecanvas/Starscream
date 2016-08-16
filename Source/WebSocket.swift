@@ -390,16 +390,15 @@ public class WebSocket : NSObject, StreamDelegate {
     
     ///handles the incoming bytes and sending them to the proper processing method
     private func processInputStream() {
-        let buf = NSMutableData(capacity: BUFFER_MAX)
-        let buffer = UnsafeMutablePointer<UInt8>(buf!.bytes)
-        let length = inputStream!.read(buffer, maxLength: BUFFER_MAX)
-        
+        var buffer = Data(capacity: BUFFER_MAX)
+		let length = buffer.withUnsafeMutableBytes { inputStream!.read($0, maxLength: BUFFER_MAX) }
+
         guard length > 0 else { return }
         var process = false
         if inputQueue.count == 0 {
             process = true
         }
-        inputQueue.append(Data(bytes: buffer, count: length))
+		inputQueue.append(buffer.subdata(in: 0..<length))
         if process {
             dequeueInput()
         }
@@ -737,10 +736,9 @@ public class WebSocket : NSObject, StreamDelegate {
     
     ///write a an error to the socket
     private func writeError(_ code: UInt16) {
-        let buf = NSMutableData(capacity: MemoryLayout<UInt16>.size)
-        let buffer = UnsafeMutablePointer<UInt8>(buf!.bytes)
-        WebSocket.writeUint16(buffer, offset: 0, value: code)
-        dequeueWrite(Data(bytes: buffer, count: sizeof(UInt16.self)), code: .connectionClose)
+        var buffer = Data(capacity: MemoryLayout<UInt16>.size)
+		let _ = buffer.withUnsafeMutableBytes { WebSocket.writeUint16($0, offset: 0, value: code) }
+        dequeueWrite(buffer, code: .connectionClose)
     }
     ///used to write things to the stream
     private func dequeueWrite(_ data: Data, code: OpCode, writeCompletion: (() -> ())? = nil) {
@@ -749,27 +747,26 @@ public class WebSocket : NSObject, StreamDelegate {
             guard let s = self else { return }
             var offset = 2
             let dataLength = data.count
-            let frame = NSMutableData(capacity: dataLength + s.MaxFrameSize)
-            let buffer = UnsafeMutablePointer<UInt8>(frame!.mutableBytes)
-            buffer[0] = s.FinMask | code.rawValue
+            var frame = Data(capacity: dataLength + s.MaxFrameSize)
+            frame[0] = s.FinMask | code.rawValue
             if dataLength < 126 {
-                buffer[1] = CUnsignedChar(dataLength)
+                frame[1] = CUnsignedChar(dataLength)
             } else if dataLength <= Int(UInt16.max) {
-                buffer[1] = 126
-                WebSocket.writeUint16(buffer, offset: offset, value: UInt16(dataLength))
+                frame[1] = 126
+				frame.withUnsafeMutableBytes { WebSocket.writeUint16($0, offset: offset, value: UInt16(dataLength)) }
                 offset += MemoryLayout<UInt16>.size
             } else {
-                buffer[1] = 127
-                WebSocket.writeUint64(buffer, offset: offset, value: UInt64(dataLength))
+                frame[1] = 127
+				frame.withUnsafeMutableBytes { WebSocket.writeUint64($0, offset: offset, value: UInt64(dataLength)) }
                 offset += MemoryLayout<UInt64>.size
             }
-            buffer[1] |= s.MaskMask
-            let maskKey = UnsafeMutablePointer<UInt8>(buffer + offset)
+            frame[1] |= s.MaskMask
+            let maskKey = UnsafeMutablePointer<UInt8>(frame + offset)
             _ = SecRandomCopyBytes(kSecRandomDefault, Int(MemoryLayout<UInt32>.size), maskKey)
             offset += MemoryLayout<UInt32>.size
             
             for i in 0..<dataLength {
-                buffer[offset] = data[i] ^ maskKey[i % MemoryLayout<UInt32>.size]
+                frame[offset] = data[i] ^ maskKey[i % MemoryLayout<UInt32>.size]
                 offset += 1
             }
             var total = 0
@@ -800,7 +797,6 @@ public class WebSocket : NSObject, StreamDelegate {
                     break
                 }
             }
-            
         }
     }
     
